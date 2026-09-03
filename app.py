@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import joblib
 import base64
+import shap
+import matplotlib.pyplot as plt
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -13,15 +15,17 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load pre-trained SVR model
+# Load pre-trained SVR model and SHAP explainer
 @st.cache_resource
-def load_model():
-    return joblib.load('model.pkl')
+def load_model_and_explainer():
+    loaded_model = joblib.load('model.pkl')
+    loaded_explainer = joblib.load('explainer.pkl')
+    return loaded_model, loaded_explainer
 
 try:
-    model = load_model()
+    model, explainer = load_model_and_explainer()
 except Exception as e:
-    st.error("Error loading 'model.pkl'. Please ensure 'model.pkl' is in the root directory.")
+    st.error("Error loading 'model.pkl' or 'explainer.pkl'. Please ensure both files are in the root directory.")
     st.stop()
 
 # Helper: Compute ECFP4 fingerprint for a single SMILES
@@ -60,7 +64,7 @@ uploaded_file = st.sidebar.file_uploader(
 # Example Data Generator
 st.sidebar.markdown("---")
 st.sidebar.subheader("Need Example Data?")
-sample_data = "SMILES molecule_name\nCc1ccc(cc1)C2=CC(=O)c3c(c(cc(c3O2)O)O)O Compound_1\nO=C(Nc1ccc(Cl)cc1)c2cccnc2 Compound_2\nCN1CCN(Cc2ccc(cc2)C(=O)Nc3ccc(C)c(c3)N4C(=O)c5ccccc5C4=O)CC1 Compound_3"
+sample_data = "nCc1ccc(cc1)C2=CC(=O)c3c(c(cc(c3O2)O)O)O Compound_1\nO=C(Nc1ccc(Cl)cc1)c2cccnc2 Compound_2\nCN1CCN(Cc2ccc(cc2)C(=O)Nc3ccc(C)c(c3)N4C(=O)c5ccccc5C4=O)CC1 Compound_3"
 st.sidebar.download_button(
     label="📥 Download Example Input File",
     data=sample_data,
@@ -132,6 +136,18 @@ if uploaded_file is not None:
                 st.markdown("### 3. Download Results")
                 st.markdown(filedownload(results_df), unsafe_allow_html=True)
 
+                # SHAP Batch Interpretation
+                st.markdown("---")
+                st.subheader("📊 Batch Model Interpretation (SHAP)")
+                st.write("Top feature contributions across all valid uploaded compounds:")
+                
+                with st.spinner("Calculating SHAP values for batch..."):
+                    shap_values_batch = explainer(X_batch)
+                    fig, ax = plt.subplots(figsize=(8, 5))
+                    shap.summary_plot(shap_values_batch, X_batch, max_display=10, show=False)
+                    st.pyplot(fig)
+                    plt.close(fig)
+
                 if len(failed_smiles) > 0:
                     st.warning(f"⚠️ Could not parse {len(failed_smiles)} invalid SMILES entries.")
 
@@ -148,7 +164,8 @@ else:
             if fp is None:
                 st.error("Invalid SMILES string. RDKit could not parse the chemical structure.")
             else:
-                pred_pIC50 = float(model.predict(fp.reshape(1, -1))[0])
+                X_single = fp.reshape(1, -1)
+                pred_pIC50 = float(model.predict(X_single)[0])
                 col1, col2 = st.columns(2)
                 col1.metric("Predicted pIC50", f"{pred_pIC50:.3f}")
                 if pred_pIC50 >= 6.0:
@@ -157,3 +174,15 @@ else:
                     col2.warning("Status: Intermediate Potency")
                 else:
                     col2.error("Status: Inactive (Low Potency)")
+
+                # SHAP Single Molecule Interpretation
+                st.markdown("---")
+                st.subheader("📊 Feature Importance (SHAP)")
+                st.write("Top ECFP4 fingerprint bits driving this prediction:")
+                
+                with st.spinner("Calculating SHAP values..."):
+                    shap_values = explainer(X_single)
+                    fig, ax = plt.subplots(figsize=(8, 4))
+                    shap.plots.bar(shap_values[0], max_display=10, show=False)
+                    st.pyplot(fig)
+                    plt.close(fig)
